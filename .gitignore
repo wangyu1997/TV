@@ -1,0 +1,10 @@
+# 忽略 .env 文件
+.env
+
+# 忽略 Python 缓存
+__pycache__/
+*.pyc
+
+# 忽略产物
+merged_config.txt
+merged_config.b64

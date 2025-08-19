@@ -1,0 +1,45 @@
+name: Merge Subscriptions
+
+on:
+  # 允许手动触发
+  workflow_dispatch:
+  # 定时执行，例如每6小时一次
+  schedule:
+    - cron: '0 */6 * * *'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      # 1. 检出代码
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # 2. 设置 Python 环境
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      # 3. 安装依赖
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      # 4. 运行合并脚本
+      # 需要将 .env 文件内容作为环境变量传入
+      - name: Run merge script
+        run: python main.py
+        env:
+          SUBSCRIPTION_URLS: ${{ secrets.SUBSCRIPTION_URLS }}
+          CACHE_TIME: ${{ secrets.CACHE_TIME }}
+          TTL: ${{ secrets.TTL }}
+
+      # 5. 提交变更
+      - name: Commit and push if changed
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: 'chore: Auto-update merged subscription'
+          file_pattern: 'merged_config.b64'
