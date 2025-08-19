@@ -213,7 +213,7 @@ def merge_subscriptions(subscription_list: List[Dict[Any, Any]]) -> Dict[Any, An
 def apply_custom_settings(merged_json: Dict[Any, Any], cache_time: Optional[str]) -> Dict[Any, Any]:
     """应用自定义设置"""
     if cache_time:
-        merged_json['cachetime'] = cache_time
+        merged_json['cache_time'] = cache_time
         print(f"Set cache time to: {cache_time}")
     
     return merged_json
