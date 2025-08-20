@@ -96,61 +96,192 @@ def check_api_latency(api_url: str, timeout_ms: int) -> bool:
         return False
 
 
-def filter_high_latency_sites(json_data: Dict[Any, Any], ttl_ms: int, max_test: Optional[int] = None) -> Dict[Any, Any]:
-    """过滤高延迟站点"""
+def test_site_latency(api_url: str) -> Optional[float]:
+    """测试单个站点的延迟，返回延迟时间或None"""
+    try:
+        start_time = time.time()
+        requests.head(api_url, timeout=5.0)
+        end_time = time.time()
+        return (end_time - start_time) * 1000
+    except Exception:
+        return None
+
+
+def remove_prefixes_and_filter_sites(json_data: Dict[Any, Any], ttl_ms: Optional[int] = None, max_test: Optional[int] = None) -> Dict[Any, Any]:
+    """去除前缀、去重、测试延迟并按ttl排序"""
     if 'api_site' not in json_data:
         return json_data
     
-    # 处理 api_site 为字典的情况
-    if isinstance(json_data['api_site'], dict):
-        original_count = len(json_data['api_site'])
-        filtered_sites = {}
-        
-        test_count = min(original_count, max_test) if max_test else original_count
-        print(f"Testing {test_count}/{original_count} sites with TTL limit {ttl_ms}ms...")
-        
-        current = 0
-        tested = 0
-        for key, site in json_data['api_site'].items():
-            if max_test and tested >= max_test:
-                # 保留剩余未测试的站点
-                filtered_sites[key] = site
-                continue
-            current += 1
-            print(f"[{current}/{original_count}] Testing {site.get('name', 'Unknown')}:")
+    print("开始去前缀、去重和延迟测试...")
+    
+    # 统一转换为字典格式
+    if isinstance(json_data['api_site'], list):
+        sites_dict = {}
+        for i, site in enumerate(json_data['api_site']):
+            sites_dict[f"api_{i+1}"] = site
+        json_data['api_site'] = sites_dict
+    
+    # 第一步：收集所有站点并去前缀
+    sites_info = []
+    for key, site in json_data['api_site'].items():
+        if 'name' in site:
+            name = site['name']
+            # 去前缀：找到第一个'-'，去掉前面的部分
+            if '-' in name:
+                clean_name = name.split('-', 1)[1]  # 只分割第一个'-'
+            else:
+                clean_name = name
             
-            if 'api' in site:
-                if check_api_latency(site['api'], ttl_ms):
-                    filtered_sites[key] = site
-                tested += 1
-            else:
-                # 保留没有 API 字段的站点
-                filtered_sites[key] = site
-                print(f"  No API field - keeping site")
-        
-        json_data['api_site'] = filtered_sites
-        filtered_count = len(filtered_sites)
-        print(f"Filtered {original_count - filtered_count} sites, {filtered_count} remaining")
-    else:
-        # 处理 api_site 为列表的情况
-        original_count = len(json_data['api_site'])
-        filtered_sites = []
-        
-        print(f"Filtering sites with TTL > {ttl_ms}ms...")
-        
-        for site in json_data['api_site']:
-            if 'api' in site:
-                if check_api_latency(site['api'], ttl_ms):
-                    filtered_sites.append(site)
+            sites_info.append({
+                'key': key,
+                'original_name': name,
+                'clean_name': clean_name,
+                'site': site.copy()
+            })
+        else:
+            # 没有name字段的站点直接保留
+            sites_info.append({
+                'key': key,
+                'original_name': 'Unknown',
+                'clean_name': 'Unknown', 
+                'site': site.copy()
+            })
+    
+    print(f"原始站点数: {len(sites_info)}")
+    
+    # 第二步：按清洁名称分组
+    from collections import defaultdict
+    name_groups = defaultdict(list)
+    for site_info in sites_info:
+        name_groups[site_info['clean_name']].append(site_info)
+    
+    duplicates = sum(1 for sites in name_groups.values() if len(sites) > 1)
+    if duplicates > 0:
+        print(f"发现 {duplicates} 组重复名称")
+    
+    # 第三步：对每组进行处理
+    final_sites_with_ttl = []
+    total_removed = 0
+    tested_count = 0
+    
+    for clean_name, sites in name_groups.items():
+        if max_test and tested_count >= max_test:
+            # 达到测试上限，剩余站点直接保留（无TTL字段）
+            for site_info in sites:
+                site_info['site']['name'] = clean_name
+                final_sites_with_ttl.append({
+                    'key': site_info['key'],
+                    'site': site_info['site'],
+                    'ttl': float('inf')  # 未测试的站点排在最后
+                })
+            continue
+            
+        if len(sites) == 1:
+            # 只有一个站点
+            site_info = sites[0]
+            site_info['site']['name'] = clean_name  # 更新名称去掉前缀
+            
+            # 测试延迟（无论是否有TTL限制）
+            if 'api' in site_info['site']:
+                tested_count += 1
+                print(f"测试: {clean_name}")
+                latency = test_site_latency(site_info['site']['api'])
+                
+                if latency is not None:
+                    # 添加TTL字段
+                    site_info['site']['ttl'] = int(latency)
+                    print(f"  延迟: {latency:.0f}ms")
+                    
+                    # 如果设置了TTL限制，检查是否超过
+                    if ttl_ms and latency > ttl_ms:
+                        print(f"  超过TTL限制({ttl_ms}ms)，过滤")
+                        total_removed += 1
+                        continue
+                    
+                    final_sites_with_ttl.append({
+                        'key': site_info['key'],
+                        'site': site_info['site'],
+                        'ttl': latency
+                    })
                 else:
-                    print(f"Filtered out high latency site: {site.get('name', site['api'])}")
+                    print(f"  测试失败")
+                    if ttl_ms:  # 如果设置了TTL限制，测试失败则过滤
+                        total_removed += 1
+                        continue
+                    else:  # 否则保留，但设置一个很高的TTL值
+                        site_info['site']['ttl'] = 9999
+                        final_sites_with_ttl.append({
+                            'key': site_info['key'],
+                            'site': site_info['site'],
+                            'ttl': 9999
+                        })
             else:
-                # 保留没有 API 字段的站点
-                filtered_sites.append(site)
-        
-        json_data['api_site'] = filtered_sites
-        filtered_count = len(filtered_sites)
-        print(f"Filtered {original_count - filtered_count} sites, {filtered_count} remaining")
+                # 没有API字段的站点直接保留，TTL设为0
+                site_info['site']['ttl'] = 0
+                final_sites_with_ttl.append({
+                    'key': site_info['key'],
+                    'site': site_info['site'],
+                    'ttl': 0
+                })
+        else:
+            # 多个重名站点，需要去重
+            print(f"\n处理重复组: \"{clean_name}\" ({len(sites)} 个站点)")
+            
+            best_site = None
+            best_latency = float('inf')
+            
+            for site_info in sites:
+                if max_test and tested_count >= max_test:
+                    break
+                if 'api' in site_info['site']:
+                    tested_count += 1
+                    latency = test_site_latency(site_info['site']['api'])
+                    
+                    if latency is not None:
+                        print(f"  {site_info['original_name']}: {latency:.0f}ms")
+                        
+                        # 如果有TTL限制，只考虑符合条件的站点
+                        if ttl_ms and latency > ttl_ms:
+                            print(f"    超过TTL限制({ttl_ms}ms)")
+                            continue
+                            
+                        if latency < best_latency:
+                            best_latency = latency
+                            best_site = site_info
+                    else:
+                        print(f"  {site_info['original_name']}: FAILED")
+            
+            if best_site:
+                best_site['site']['name'] = clean_name
+                best_site['site']['ttl'] = int(best_latency)
+                final_sites_with_ttl.append({
+                    'key': best_site['key'],
+                    'site': best_site['site'],
+                    'ttl': best_latency
+                })
+                print(f"  -> 保留: {best_site['original_name']} (延迟: {best_latency:.0f}ms)")
+                total_removed += len(sites) - 1
+            else:
+                print(f"  -> 所有站点都不符合要求，全部过滤")
+                total_removed += len(sites)
+    
+    # 第四步：按TTL排序
+    print(f"\n按TTL排序...")
+    final_sites_with_ttl.sort(key=lambda x: x['ttl'])
+    
+    # 重新生成键名并构建最终结果
+    final_sites = {}
+    for i, site_data in enumerate(final_sites_with_ttl, 1):
+        new_key = f"api_{i}"
+        final_sites[new_key] = site_data['site']
+    
+    json_data['api_site'] = final_sites
+    
+    print(f"\n处理完成:")
+    print(f"- 原始站点: {len(sites_info)} 个")
+    print(f"- 去重/过滤: {total_removed} 个") 
+    print(f"- 最终保留: {len(final_sites)} 个站点")
+    print(f"- 已按TTL从小到大排序")
     
     return json_data
 
@@ -261,10 +392,8 @@ def main():
     # 3. 合并与去重
     merged_json = merge_subscriptions(subscriptions)
     
-    # 4. 过滤高延迟站点（如果设置了 TTL）
-    if ttl:
-        print("Filtering merged subscription for high latency sites...")
-        merged_json = filter_high_latency_sites(merged_json, ttl, max_test_sites)
+    # 4. 去前缀、去重并过滤高延迟站点
+    merged_json = remove_prefixes_and_filter_sites(merged_json, ttl, max_test_sites)
     
     # 5. 应用自定义设置
     merged_json = apply_custom_settings(merged_json, cache_time)
