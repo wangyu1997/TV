@@ -2,6 +2,7 @@
 """
 订阅源合并与更新脚本
 用于合并多个订阅源，进行去重和自定义处理，并最终生成一个 BASE58 编码的合并后配置
+修改版：确保至少保留一个豆瓣资源
 """
 
 import os
@@ -107,8 +108,25 @@ def test_site_latency(api_url: str) -> Optional[float]:
         return None
 
 
+def is_douban_resource(site: Dict[Any, Any]) -> bool:
+    """判断是否为豆瓣资源"""
+    # 检查name字段是否包含"豆瓣"
+    if 'name' in site:
+        name = site['name'].lower()
+        if '豆瓣' in name or 'douban' in name:
+            return True
+    
+    # 检查api字段URL是否包含douban
+    if 'api' in site:
+        api_url = site['api'].lower()
+        if 'douban' in api_url:
+            return True
+    
+    return False
+
+
 def remove_prefixes_and_filter_sites(json_data: Dict[Any, Any], ttl_ms: Optional[int] = None, max_test: Optional[int] = None) -> Dict[Any, Any]:
-    """去除前缀、去重、测试延迟并按ttl排序"""
+    """去除前缀、去重、测试延迟并按ttl排序，同时确保保留豆瓣资源"""
     if 'api_site' not in json_data:
         return json_data
     
@@ -121,8 +139,10 @@ def remove_prefixes_and_filter_sites(json_data: Dict[Any, Any], ttl_ms: Optional
             sites_dict[f"api_{i+1}"] = site
         json_data['api_site'] = sites_dict
     
-    # 第一步：收集所有站点并去前缀
+    # 第一步：收集所有站点并去前缀，同时标记豆瓣资源
     sites_info = []
+    douban_sites = []  # 单独收集豆瓣资源
+    
     for key, site in json_data['api_site'].items():
         if 'name' in site:
             name = site['name']
@@ -132,22 +152,35 @@ def remove_prefixes_and_filter_sites(json_data: Dict[Any, Any], ttl_ms: Optional
             else:
                 clean_name = name
             
-            sites_info.append({
+            site_info = {
                 'key': key,
                 'original_name': name,
                 'clean_name': clean_name,
-                'site': site.copy()
-            })
+                'site': site.copy(),
+                'is_douban': is_douban_resource(site)
+            }
+            
+            sites_info.append(site_info)
+            
+            # 如果是豆瓣资源，也加入特殊列表
+            if site_info['is_douban']:
+                douban_sites.append(site_info)
         else:
             # 没有name字段的站点直接保留
-            sites_info.append({
+            site_info = {
                 'key': key,
                 'original_name': 'Unknown',
                 'clean_name': 'Unknown', 
-                'site': site.copy()
-            })
+                'site': site.copy(),
+                'is_douban': is_douban_resource(site)
+            }
+            sites_info.append(site_info)
+            
+            if site_info['is_douban']:
+                douban_sites.append(site_info)
     
-    print(f"原始站点数: {len(sites_info)}")
+    print(f"原始站点数: {len(sites_info)} 个")
+    print(f"豆瓣资源数: {len(douban_sites)} 个")
     
     # 第二步：按清洁名称分组
     from collections import defaultdict
@@ -163,17 +196,29 @@ def remove_prefixes_and_filter_sites(json_data: Dict[Any, Any], ttl_ms: Optional
     final_sites_with_ttl = []
     total_removed = 0
     tested_count = 0
+    douban_preserved = None  # 记录保留的豆瓣资源
     
     for clean_name, sites in name_groups.items():
         if max_test and tested_count >= max_test:
-            # 达到测试上限，剩余站点直接保留（无TTL字段）
+            # 达到测试上限，但要特殊处理豆瓣资源
             for site_info in sites:
                 site_info['site']['name'] = clean_name
-                final_sites_with_ttl.append({
-                    'key': site_info['key'],
-                    'site': site_info['site'],
-                    'ttl': float('inf')  # 未测试的站点排在最后
-                })
+                if site_info['is_douban'] and douban_preserved is None:
+                    # 如果是豆瓣资源且还没有保留任何豆瓣资源，则保留
+                    final_sites_with_ttl.append({
+                        'key': site_info['key'],
+                        'site': site_info['site'],
+                        'ttl': 0  # 豆瓣资源设置较高优先级
+                    })
+                    douban_preserved = site_info
+                    print(f"✓ 保留豆瓣资源: {clean_name} (未测试)")
+                elif not site_info['is_douban']:
+                    # 非豆瓣资源直接保留（无TTL字段）
+                    final_sites_with_ttl.append({
+                        'key': site_info['key'],
+                        'site': site_info['site'],
+                        'ttl': float('inf')  # 未测试的站点排在最后
+                    })
             continue
             
         if len(sites) == 1:
@@ -192,20 +237,42 @@ def remove_prefixes_and_filter_sites(json_data: Dict[Any, Any], ttl_ms: Optional
                     site_info['site']['ttl'] = int(latency)
                     print(f"  延迟: {latency:.0f}ms")
                     
-                    # 如果设置了TTL限制，检查是否超过
-                    if ttl_ms and latency > ttl_ms:
-                        print(f"  超过TTL限制({ttl_ms}ms)，过滤")
-                        total_removed += 1
-                        continue
-                    
-                    final_sites_with_ttl.append({
-                        'key': site_info['key'],
-                        'site': site_info['site'],
-                        'ttl': latency
-                    })
+                    # 如果是豆瓣资源，优先保留
+                    if site_info['is_douban']:
+                        final_sites_with_ttl.append({
+                            'key': site_info['key'],
+                            'site': site_info['site'],
+                            'ttl': latency
+                        })
+                        if douban_preserved is None or latency < douban_preserved.get('ttl', float('inf')):
+                            douban_preserved = {**site_info, 'ttl': latency}
+                        print(f"  ✓ 豆瓣资源保留: {clean_name}")
+                    else:
+                        # 非豆瓣资源按TTL限制处理
+                        if ttl_ms and latency > ttl_ms:
+                            print(f"  超过TTL限制({ttl_ms}ms)，过滤")
+                            total_removed += 1
+                            continue
+                        
+                        final_sites_with_ttl.append({
+                            'key': site_info['key'],
+                            'site': site_info['site'],
+                            'ttl': latency
+                        })
                 else:
                     print(f"  测试失败")
-                    if ttl_ms:  # 如果设置了TTL限制，测试失败则过滤
+                    if site_info['is_douban']:
+                        # 豆瓣资源即使测试失败也保留
+                        site_info['site']['ttl'] = 5000  # 设置一个中等的TTL值
+                        final_sites_with_ttl.append({
+                            'key': site_info['key'],
+                            'site': site_info['site'],
+                            'ttl': 5000
+                        })
+                        if douban_preserved is None:
+                            douban_preserved = {**site_info, 'ttl': 5000}
+                        print(f"  ✓ 豆瓣资源保留(测试失败): {clean_name}")
+                    elif ttl_ms:  # 如果设置了TTL限制，测试失败则过滤
                         total_removed += 1
                         continue
                     else:  # 否则保留，但设置一个很高的TTL值
@@ -216,21 +283,61 @@ def remove_prefixes_and_filter_sites(json_data: Dict[Any, Any], ttl_ms: Optional
                             'ttl': 9999
                         })
             else:
-                # 没有API字段的站点直接保留，TTL设为0
-                site_info['site']['ttl'] = 0
-                final_sites_with_ttl.append({
-                    'key': site_info['key'],
-                    'site': site_info['site'],
-                    'ttl': 0
-                })
+                # 没有API字段的站点
+                if site_info['is_douban']:
+                    # 豆瓣资源保留
+                    site_info['site']['ttl'] = 0
+                    final_sites_with_ttl.append({
+                        'key': site_info['key'],
+                        'site': site_info['site'],
+                        'ttl': 0
+                    })
+                    if douban_preserved is None:
+                        douban_preserved = {**site_info, 'ttl': 0}
+                    print(f"  ✓ 豆瓣资源保留(无API): {clean_name}")
+                else:
+                    # 非豆瓣资源直接保留，TTL设为0
+                    site_info['site']['ttl'] = 0
+                    final_sites_with_ttl.append({
+                        'key': site_info['key'],
+                        'site': site_info['site'],
+                        'ttl': 0
+                    })
         else:
             # 多个重名站点，需要去重
             print(f"\n处理重复组: \"{clean_name}\" ({len(sites)} 个站点)")
             
             best_site = None
             best_latency = float('inf')
+            best_douban_site = None
+            best_douban_latency = float('inf')
             
-            for site_info in sites:
+            # 分别处理豆瓣和非豆瓣资源
+            douban_sites_in_group = [s for s in sites if s['is_douban']]
+            non_douban_sites_in_group = [s for s in sites if not s['is_douban']]
+            
+            # 测试豆瓣资源
+            for site_info in douban_sites_in_group:
+                if max_test and tested_count >= max_test:
+                    break
+                if 'api' in site_info['site']:
+                    tested_count += 1
+                    latency = test_site_latency(site_info['site']['api'])
+                    
+                    if latency is not None:
+                        print(f"  {site_info['original_name']} (豆瓣): {latency:.0f}ms")
+                        if latency < best_douban_latency:
+                            best_douban_latency = latency
+                            best_douban_site = site_info
+                    else:
+                        print(f"  {site_info['original_name']} (豆瓣): FAILED")
+                        # 豆瓣资源即使失败也可能被保留
+                        if best_douban_site is None:
+                            best_douban_site = site_info
+                            best_douban_latency = 5000
+            
+            # 测试非豆瓣资源
+            for site_info in non_douban_sites_in_group:
                 if max_test and tested_count >= max_test:
                     break
                 if 'api' in site_info['site']:
@@ -251,7 +358,20 @@ def remove_prefixes_and_filter_sites(json_data: Dict[Any, Any], ttl_ms: Optional
                     else:
                         print(f"  {site_info['original_name']}: FAILED")
             
-            if best_site:
+            # 优先保留豆瓣资源
+            if best_douban_site:
+                best_douban_site['site']['name'] = clean_name
+                best_douban_site['site']['ttl'] = int(best_douban_latency)
+                final_sites_with_ttl.append({
+                    'key': best_douban_site['key'],
+                    'site': best_douban_site['site'],
+                    'ttl': best_douban_latency
+                })
+                if douban_preserved is None or best_douban_latency < douban_preserved.get('ttl', float('inf')):
+                    douban_preserved = {**best_douban_site, 'ttl': best_douban_latency}
+                print(f"  -> ✓ 保留豆瓣资源: {best_douban_site['original_name']} (延迟: {best_douban_latency:.0f}ms)")
+                total_removed += len(sites) - 1
+            elif best_site:
                 best_site['site']['name'] = clean_name
                 best_site['site']['ttl'] = int(best_latency)
                 final_sites_with_ttl.append({
@@ -264,6 +384,37 @@ def remove_prefixes_and_filter_sites(json_data: Dict[Any, Any], ttl_ms: Optional
             else:
                 print(f"  -> 所有站点都不符合要求，全部过滤")
                 total_removed += len(sites)
+    
+    # 确保至少有一个豆瓣资源被保留
+    if douban_preserved is None and douban_sites:
+        print(f"\n⚠️  警告：没有豆瓣资源通过测试，强制保留TTL最小的豆瓣资源")
+        # 找到延迟最小的豆瓣资源（即使超过TTL限制）
+        best_douban = None
+        best_douban_ttl = float('inf')
+        
+        for douban_site in douban_sites:
+            if 'api' in douban_site['site']:
+                latency = test_site_latency(douban_site['site']['api'])
+                if latency is not None and latency < best_douban_ttl:
+                    best_douban_ttl = latency
+                    best_douban = douban_site
+                elif latency is None and best_douban is None:
+                    # 如果没有找到可测试的，至少保留一个
+                    best_douban = douban_site
+                    best_douban_ttl = 9999
+            elif best_douban is None:
+                # 没有API的豆瓣资源
+                best_douban = douban_site
+                best_douban_ttl = 0
+        
+        if best_douban:
+            best_douban['site']['ttl'] = int(best_douban_ttl)
+            final_sites_with_ttl.append({
+                'key': best_douban['key'],
+                'site': best_douban['site'],
+                'ttl': best_douban_ttl
+            })
+            print(f"✓ 强制保留豆瓣资源: {best_douban['clean_name']} (TTL: {best_douban_ttl:.0f}ms)")
     
     # 第四步：按TTL排序
     print(f"\n按TTL排序...")
@@ -282,6 +433,8 @@ def remove_prefixes_and_filter_sites(json_data: Dict[Any, Any], ttl_ms: Optional
     print(f"- 去重/过滤: {total_removed} 个") 
     print(f"- 最终保留: {len(final_sites)} 个站点")
     print(f"- 已按TTL从小到大排序")
+    if douban_preserved or any('豆瓣' in site.get('name', '').lower() or 'douban' in site.get('name', '').lower() or 'douban' in site.get('api', '').lower() for site in final_sites.values()):
+        print(f"✓ 已确保保留豆瓣资源")
     
     return json_data
 
@@ -371,7 +524,7 @@ def encode_and_save(merged_json: Dict[Any, Any], output_file: str = 'merged_conf
 
 def main():
     """主函数"""
-    print("=== 订阅源合并工具 ===")
+    print("=== 订阅源合并工具 (豆瓣资源保护版) ===")
     
     # 1. 加载配置
     urls, cache_time, ttl, max_test_sites = load_config()
@@ -392,7 +545,7 @@ def main():
     # 3. 合并与去重
     merged_json = merge_subscriptions(subscriptions)
     
-    # 4. 去前缀、去重并过滤高延迟站点
+    # 4. 去前缀、去重并过滤高延迟站点（保护豆瓣资源）
     merged_json = remove_prefixes_and_filter_sites(merged_json, ttl, max_test_sites)
     
     # 5. 应用自定义设置
