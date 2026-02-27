@@ -523,23 +523,61 @@ def encode_and_save(merged_json: Dict[Any, Any], output_file: str = 'merged_conf
 
 
 def generate_stream_js(sites: Dict[Any, Any], output_file: str = 'stream.js') -> None:
-    """生成 stream.js 文件中的 RESOURCE_SITES 内容"""
+    """生成 stream.js 文件中的 RESOURCE_SITES 内容，并验证 URL 合法性"""
     print("\n生成 stream.js 格式的资源站点列表...")
     
-    lines = ['const RESOURCE_SITES = `']
+    valid_sites = []
+    
     for key, site in sites.items():
         if 'name' in site and 'api' in site:
             name = site['name']
             api_url = site['api']
-            if api_url.endswith('/'):
-                api_url = api_url[:-1]
-            lines.append(f"{name},{api_url}/")
+            
+            # 验证 URL
+            is_valid = False
+            final_url = api_url
+            
+            # 尝试原始 URL
+            try:
+                response = requests.get(api_url, params={'ac': "detail", 'wd': "庆余年"}, timeout=5)
+                if response.status_code == 200:
+                    data = response.json()
+                    if data.get('code') == 1 and data.get('list') and len(data.get('list', [])) > 0:
+                        is_valid = True
+                        print(f"✓ URL 有效: {name}")
+            except Exception as e:
+                pass
+            
+            # 如果原始 URL 无效，尝试 vod/at/json 格式
+            if not is_valid:
+                try:
+                    modified_url = api_url.rstrip('/') + '/at/json/'
+                    response = requests.get(modified_url, params={'ac': "detail", 'wd': "庆余年"}, timeout=5)
+                    if response.status_code == 200:
+                        data = response.json()
+                        if data.get('code') == 1 and data.get('list') and len(data.get('list', [])) > 0:
+                            is_valid = True
+                            final_url = modified_url
+                            print(f"✓ URL 修正后有效: {name}")
+                except Exception as e:
+                    pass
+            
+            if is_valid:
+                if final_url.endswith('/'):
+                    final_url = final_url[:-1]
+                valid_sites.append((name, final_url))
+    
+    print(f"验证完成: {len(valid_sites)}/{len(sites)} 个站点有效")
+    
+    lines = ['const RESOURCE_SITES = `']
+    for name, url in valid_sites:
+        lines.append(f"{name},{url}/")
     
     lines.append('`;')
     
     resource_sites_content = '\n'.join(lines)
     
-    print(f"Generated {len(lines) - 2} resource sites for stream.js")
+    print(f"Generated {len(valid_sites)} resource sites for stream.js")
     
     try:
         with open(output_file, 'r', encoding='utf-8') as f:
