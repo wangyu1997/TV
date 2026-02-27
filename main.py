@@ -21,7 +21,6 @@ def load_config() -> tuple:
     load_dotenv()
     
     subscription_urls = os.getenv('SUBSCRIPTION_URLS', '')
-    print(f"SUBSCRIPTION_URLS: {subscription_urls}")
     if not subscription_urls:
         print("Error: SUBSCRIPTION_URLS environment variable is required")
         sys.exit(1)
@@ -523,6 +522,44 @@ def encode_and_save(merged_json: Dict[Any, Any], output_file: str = 'merged_conf
     print(f"Expansion ratio: {len(encoded_content)/len(json_str):.2f}x")
 
 
+def generate_stream_js(sites: Dict[Any, Any], output_file: str = 'stream.js') -> None:
+    """生成 stream.js 文件中的 RESOURCE_SITES 内容"""
+    print("\n生成 stream.js 格式的资源站点列表...")
+    
+    lines = ['const RESOURCE_SITES = `']
+    for key, site in sites.items():
+        if 'name' in site and 'api' in site:
+            name = site['name']
+            api_url = site['api']
+            if api_url.endswith('/'):
+                api_url = api_url[:-1]
+            lines.append(f"{name},{api_url}/")
+    
+    lines.append('`;')
+    
+    resource_sites_content = '\n'.join(lines)
+    
+    print(f"Generated {len(lines) - 2} resource sites for stream.js")
+    
+    try:
+        with open(output_file, 'r', encoding='utf-8') as f:
+            existing_content = f.read()
+    except FileNotFoundError:
+        existing_content = ''
+    
+    if existing_content:
+        import re
+        pattern = r'const RESOURCE_SITES = `.*?`;'
+        new_content = re.sub(pattern, resource_sites_content, existing_content, flags=re.DOTALL)
+    else:
+        new_content = resource_sites_content + '\n\n' + existing_content
+    
+    with open(output_file, 'w', encoding='utf-8') as f:
+        f.write(new_content)
+    
+    print(f"stream.js updated: {output_file}")
+
+
 def main():
     """主函数"""
     print("=== 订阅源合并工具 (豆瓣资源保护版) ===")
@@ -554,6 +591,9 @@ def main():
     
     # 6. 编码与输出
     encode_and_save(merged_json)
+    
+    # 7. 生成 stream.js 格式的资源站点列表
+    generate_stream_js(merged_json.get('api_site', {}))
     
     print("=== 合并完成 ===")
 
