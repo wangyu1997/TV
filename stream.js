@@ -1,36 +1,39 @@
 const RESOURCE_SITES = `
 量子资源,https://cj.lziapi.com/api.php/provide/vod/
 影视工厂,https://cj.lziapi.com/api.php/provide/vod/
-U酷资源,https://api.ukuapi.com/api.php/provide/vod/
-155资源,https://155api.com/api.php/provide/vod/
-红牛资源,https://www.hongniuzy3.com/api.php/provide/vod/
 最大资源,https://api.zuidapi.com/api.php/provide/vod/
-新浪资源阿,https://api.xinlangapi.com/xinlangapi.php/provide/vod/
-极速资源,https://jszyapi.com/api.php/provide/vod/
-杏吧资源,https://xingba111.com/api.php/provide/vod/
+155资源,https://155api.com/api.php/provide/vod/
 无尽资源,https://api.wujinapi.me/api.php/provide/vod/
+U酷资源,https://api.ukuapi.com/api.php/provide/vod/
+红牛资源,https://www.hongniuzy3.com/api.php/provide/vod/
 黄色资源啊啊,https://hsckzy888.com/api.php/provide/vod/
-金鹰资源,https://jyzyapi.com/api.php/provide/vod/
-最大点播,http://zuidazy.me/api.php/provide/vod/
+极速资源,https://jszyapi.com/api.php/provide/vod/
 wujinapi无尽,https://api.wujinapi.cc/api.php/provide/vod/
-小鸡资源,https://api.xiaojizy.live/provide/vod/
-鲨鱼资源,https://shayuapi.com/api.php/provide/vod/
+最大点播,http://zuidazy.me/api.php/provide/vod/
 新浪点播,https://api.xinlangapi.com/xinlangapi.php/provide/vod/
+暴风资源,https://bfzyapi.com/api.php/provide/vod/
+金鹰资源采集网,https://jyzyapi.com/provide/vod/
+杏吧资源,https://xingba111.com/api.php/provide/vod/
+虎牙资源,https://www.huyaapi.com/api.php/provide/vod/
+鲨鱼资源,https://shayuapi.com/api.php/provide/vod/
+乐播资源,https://lbapi9.com/api.php/provide/vod/
 玉兔资源,https://apiyutu.com/api.php/provide/vod/
-旺旺资源,https://api.wwzy.tv/api.php/provide/vod/
-辣椒资源,https://apilj.com/api.php/provide/vod/
-旺旺短剧,https://wwzy.tv/api.php/provide/vod/
-精品资源,https://www.jingpinx.com/api.php/provide/vod/
-ikun资源,https://ikunzyapi.com/api.php/provide/vod/
-老色逼资源,https://apilsbzy1.com/api.php/provide/vod/
-卧龙资源,https://wolongzyw.com/api.php/provide/vod/
-速博资源,https://subocaiji.com/api.php/provide/vod/
-番号资源,http://fhapi9.com/api.php/provide/vod/
-神马云,https://api.1080zyku.com/inc/apijson.php/
-1080资源,https://api.1080zyku.com/inc/api_mac10.php/
-卧龙点播,https://collect.wolongzyw.com/api.php/provide/vod/
 细胞采集黄色,https://www.xxibaozyw.com/api.php/provide/vod/
+老色逼资源,https://apilsbzy1.com/api.php/provide/vod/
 豆瓣资源,https://dbzy.tv/api.php/provide/vod/
+精品资源,https://www.jingpinx.com/api.php/provide/vod/
+辣椒资源,https://apilj.com/api.php/provide/vod/
+金鹰点播,https://jinyingzy.com/api.php/provide/vod/
+旺旺短剧,https://wwzy.tv/api.php/provide/vod/
+卧龙资源,https://wolongzyw.com/api.php/provide/vod/
+金鹰资源,https://jyzyapi.com/api.php/provide/vod/
+旺旺资源,https://api.wwzy.tv/api.php/provide/vod/
+番号资源,http://fhapi9.com/api.php/provide/vod/
+ikun资源,https://ikunzyapi.com/api.php/provide/vod/
+卧龙点播,https://collect.wolongzyw.com/api.php/provide/vod/
+速博资源,https://subocaiji.com/api.php/provide/vod/
+神马云,https://api.1080zyku.com/inc/apijson.php/
+小鸡资源,https://api.xiaojizy.live/provide/vod/
 百万资源,https://api.bwzyz.com/api.php/provide/vod/
 `;
 
@@ -57,12 +60,6 @@ WidgetMetadata = {
         { title: "启用", value: "enabled" },
         { title: "禁用", value: "disabled" }
       ]
-    },
-    {
-      name: "VodData",
-      title: "JSON或CSV格式的源配置",
-      type: "input",
-      value: RESOURCE_SITES
     }
   ],
   modules: [
@@ -150,6 +147,7 @@ function parseResourceSites(VodData) {
     }
     return null;
   };
+  
   try {
     const trimmed = VodData?.trim() || "";
     if (trimmed.startsWith('[') || trimmed.startsWith('{')) {
@@ -157,17 +155,18 @@ function parseResourceSites(VodData) {
     }
     return trimmed.split('\n').map(parseLine).filter(Boolean);
   } catch (e) {
-    return RESOURCE_SITES.trim().split('\n').map(parseLine).filter(Boolean);
+    return [];
   }
 }
 
 // --- 主入口函数 ---
 
 async function loadResource(params) {
-  const { seriesName, type = 'tv', season, episode, multiSource, VodData } = params;
+  const { seriesName, type = 'tv', season, episode, multiSource } = params;
   if (multiSource !== "enabled" || !seriesName) return [];
 
-  const resourceSites = parseResourceSites(VodData);
+  // 如果 VodData 为空，使用 RESOURCE_SITES 作为默认值
+  const resourceSites = parseResourceSites(RESOURCE_SITES);
   const { baseName, seasonNumber } = extractSeasonInfo(seriesName);
   const targetSeason = season ? parseInt(season) : seasonNumber;
   const targetEpisode = episode ? parseInt(episode) : null;
