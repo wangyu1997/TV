@@ -21,6 +21,7 @@ def load_config() -> tuple:
     load_dotenv()
     
     subscription_urls = os.getenv('SUBSCRIPTION_URLS', '')
+    print(f"SUBSCRIPTION_URLS: {subscription_urls}")
     if not subscription_urls:
         print("Error: SUBSCRIPTION_URLS environment variable is required")
         sys.exit(1)
