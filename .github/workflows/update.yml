@@ -42,4 +42,4 @@ jobs:
         uses: stefanzweifel/git-auto-commit-action@v5
         with:
           commit_message: 'chore: Auto-update merged subscription'
-          file_pattern: 'merged_config.b58'
+          file_pattern: 'merged_config.b58 stream.js'
